@@ -30,9 +30,11 @@ use crate::util::row_id::extract_vnode_id_from_row_id;
 pub struct VirtualNode(VirtualNodeInner);
 
 /// The internal representation of a virtual node id.
+///
+/// Note: not all bits of the inner representation are used.
 type VirtualNodeInner = u16;
-static_assertions::const_assert!(VirtualNodeInner::BITS >= VirtualNode::BITS as u32);
 
+// TODO(var-vnode): remove this as the vnode count can be variable
 impl From<Crc32HashCode> for VirtualNode {
     fn from(hash_code: Crc32HashCode) -> Self {
         // Take the least significant bits of the hash code.
@@ -43,13 +45,24 @@ impl From<Crc32HashCode> for VirtualNode {
 }
 
 impl VirtualNode {
-    /// The number of bits used to represent a virtual node.
-    ///
-    /// Note: Not all bits of the inner representation are used. One should rely on this constant
-    /// to determine the count of virtual nodes.
-    pub const BITS: usize = 8;
     /// The total count of virtual nodes.
-    pub const COUNT: usize = 1 << Self::BITS;
+    // TODO(var-vnode): remove this and only keep `COUNT_FOR_TEST`
+    pub const COUNT: usize = 1 << 8;
+    /// The maximum value of the virtual node.
+    // TODO(var-vnode): remove this and only keep `MAX_FOR_TEST`
+    pub const MAX: VirtualNode = VirtualNode::from_index(Self::COUNT - 1);
+}
+
+impl VirtualNode {
+    /// The total count of virtual nodes, for testing purposes.
+    pub const COUNT_FOR_TEST: usize = Self::COUNT;
+    /// The maximum value of the virtual node, for testing purposes.
+    pub const MAX_FOR_TEST: VirtualNode = Self::MAX;
+}
+
+impl VirtualNode {
+    /// The maximum count of virtual nodes that fits in [`VirtualNodeInner`].
+    pub const MAX_COUNT: usize = VirtualNodeInner::MAX as _;
     /// The size of a virtual node in bytes, in memory or serialized representation.
     pub const SIZE: usize = std::mem::size_of::<Self>();
 }
@@ -58,8 +71,6 @@ impl VirtualNode {
 pub type AllVirtualNodeIter = std::iter::Map<std::ops::Range<usize>, fn(usize) -> VirtualNode>;
 
 impl VirtualNode {
-    /// The maximum value of the virtual node.
-    pub const MAX: VirtualNode = VirtualNode::from_index(Self::COUNT - 1);
     /// We may use `VirtualNode` as a datum in a stream, or store it as a column.
     /// Hence this reifies it as a RW datatype.
     pub const RW_TYPE: DataType = DataType::Int16;
@@ -68,7 +79,7 @@ impl VirtualNode {
 
     /// Creates a virtual node from the `usize` index.
     pub const fn from_index(index: usize) -> Self {
-        debug_assert!(index < Self::COUNT);
+        debug_assert!(index < Self::MAX_COUNT);
         Self(index as _)
     }
 
@@ -79,7 +90,6 @@ impl VirtualNode {
 
     /// Creates a virtual node from the given scalar representation. Used by `VNODE` expression.
     pub const fn from_scalar(scalar: i16) -> Self {
-        debug_assert!((scalar as usize) < Self::COUNT);
         Self(scalar as _)
     }
 
@@ -99,7 +109,6 @@ impl VirtualNode {
     /// Creates a virtual node from the given big-endian bytes representation.
     pub const fn from_be_bytes(bytes: [u8; Self::SIZE]) -> Self {
         let inner = VirtualNodeInner::from_be_bytes(bytes);
-        debug_assert!((inner as usize) < Self::COUNT);
         Self(inner)
     }
 
@@ -109,14 +118,9 @@ impl VirtualNode {
     }
 
     /// Iterates over all virtual nodes.
-    pub fn all() -> AllVirtualNodeIter {
-        (0..Self::COUNT).map(Self::from_index)
+    pub fn all(vnode_count: usize) -> AllVirtualNodeIter {
+        (0..vnode_count).map(Self::from_index)
     }
-}
-
-impl VirtualNode {
-    pub const COUNT_FOR_TEST: usize = Self::COUNT;
-    pub const MAX_FOR_TEST: VirtualNode = Self::MAX;
 }
 
 impl VirtualNode {
