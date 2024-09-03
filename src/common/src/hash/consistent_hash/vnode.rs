@@ -34,12 +34,17 @@ pub struct VirtualNode(VirtualNodeInner);
 /// Note: not all bits of the inner representation are used.
 type VirtualNodeInner = u16;
 
-// TODO(var-vnode): remove this as the vnode count can be variable
-impl From<Crc32HashCode> for VirtualNode {
-    fn from(hash_code: Crc32HashCode) -> Self {
+/// `vnode_count` must be provided to convert a hash code to a virtual node.
+///
+/// Use [`Crc32HashCodeToVnodeExt::to_vnode`] instead.
+impl !From<Crc32HashCode> for VirtualNode {}
+
+#[easy_ext::ext(Crc32HashCodeToVnodeExt)]
+impl Crc32HashCode {
+    fn to_vnode(self, vnode_count: usize) -> VirtualNode {
         // Take the least significant bits of the hash code.
         // TODO: should we use the most significant bits?
-        let inner = (hash_code.value() % Self::COUNT as u64) as VirtualNodeInner;
+        let inner = (self.value() % vnode_count as u64) as VirtualNodeInner;
         VirtualNode(inner)
     }
 }
@@ -128,7 +133,11 @@ impl VirtualNode {
     // chunk. When only one column is provided and its type is `Serial`, we consider the column to
     // be the one that contains RowId, and use a special method to skip the calculation of Hash
     // and directly extract the `VirtualNode` from `RowId`.
-    pub fn compute_chunk(data_chunk: &DataChunk, keys: &[usize]) -> Vec<VirtualNode> {
+    pub fn compute_chunk(
+        data_chunk: &DataChunk,
+        keys: &[usize],
+        vnode_count: usize,
+    ) -> Vec<VirtualNode> {
         if let Ok(idx) = keys.iter().exactly_one()
             && let ArrayImpl::Serial(serial_array) = &**data_chunk.column_at(*idx)
         {
@@ -144,7 +153,7 @@ impl VirtualNode {
                         // This process doesn’t guarantee the order of rows, producing indeterminate results in some cases,
                         // such as when `distinct on` is used without an `order by`.
                         let (row, _) = data_chunk.row_at(idx);
-                        row.hash(Crc32FastBuilder).into()
+                        row.hash(Crc32FastBuilder).to_vnode(vnode_count)
                     }
                 })
                 .collect();
@@ -153,19 +162,29 @@ impl VirtualNode {
         data_chunk
             .get_hash_values(keys, Crc32FastBuilder)
             .into_iter()
-            .map(|hash| hash.into())
+            .map(|hash| hash.to_vnode(vnode_count))
             .collect()
+    }
+
+    /// Equivalent to [`Self::compute_chunk`] with [`VirtualNode::COUNT_FOR_TEST`] as the vnode count.
+    pub fn compute_chunk_for_test(data_chunk: &DataChunk, keys: &[usize]) -> Vec<VirtualNode> {
+        Self::compute_chunk(data_chunk, keys, Self::COUNT_FOR_TEST)
     }
 
     // `compute_row` is used to calculate the `VirtualNode` for the corresponding columns in a
     // `Row`. Similar to `compute_chunk`, it also contains special handling for serial columns.
-    pub fn compute_row(row: impl Row, indices: &[usize]) -> VirtualNode {
+    pub fn compute_row(row: impl Row, indices: &[usize], vnode_count: usize) -> VirtualNode {
         let project = row.project(indices);
         if let Ok(Some(ScalarRefImpl::Serial(s))) = project.iter().exactly_one().as_ref() {
             return extract_vnode_id_from_row_id(s.as_row_id());
         }
 
-        project.hash(Crc32FastBuilder).into()
+        project.hash(Crc32FastBuilder).to_vnode(vnode_count)
+    }
+
+    /// Equivalent to [`Self::compute_row`] with [`VirtualNode::COUNT_FOR_TEST`] as the vnode count.
+    pub fn compute_row_for_test(row: impl Row, indices: &[usize]) -> VirtualNode {
+        Self::compute_row(row, indices, Self::COUNT_FOR_TEST)
     }
 }
 
@@ -188,7 +207,7 @@ mod tests {
         );
 
         let chunk = DataChunk::from_pretty(chunk.as_str());
-        let vnodes = VirtualNode::compute_chunk(&chunk, &[0]);
+        let vnodes = VirtualNode::compute_chunk_for_test(&chunk, &[0]);
 
         assert_eq!(
             vnodes.as_slice(),
@@ -204,7 +223,7 @@ mod tests {
             Some(ScalarImpl::Int64(12345)),
         ]);
 
-        let vnode = VirtualNode::compute_row(&row, &[0]);
+        let vnode = VirtualNode::compute_row_for_test(&row, &[0]);
 
         assert_eq!(vnode, VirtualNode::from_index(100));
     }
@@ -225,7 +244,7 @@ mod tests {
         );
 
         let chunk = DataChunk::from_pretty(chunk.as_str());
-        let vnodes = VirtualNode::compute_chunk(&chunk, &[0]);
+        let vnodes = VirtualNode::compute_chunk_for_test(&chunk, &[0]);
 
         assert_eq!(
             vnodes.as_slice(),
