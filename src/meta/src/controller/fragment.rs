@@ -1613,8 +1613,11 @@ mod tests {
             })
             .collect();
 
-        let mut actor_bitmaps =
-            ActorMapping::new_uniform((0..actor_count).map(|i| i as _), VirtualNode::COUNT_FOR_TEST).to_bitmaps();
+        let mut actor_bitmaps = ActorMapping::new_uniform(
+            (0..actor_count).map(|i| i as _),
+            VirtualNode::COUNT_FOR_TEST,
+        )
+        .to_bitmaps();
 
         let actors = (0..actor_count)
             .map(|actor_id| {
